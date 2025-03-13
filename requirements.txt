@@ -1,7 +1,5 @@
 streamlit
 requests
-oauthlib
 requests-oauthlib
 pillow
 reportlab
-sqlite3
