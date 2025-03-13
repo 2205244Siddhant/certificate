@@ -1,134 +1,122 @@
 import streamlit as st
 import requests
-import sqlite3
 from requests_oauthlib import OAuth2Session
 from PIL import Image
 from io import BytesIO
-from datetime import datetime, timedelta
+from reportlab.pdfgen import canvas
+import sqlite3
+from datetime import datetime
 
 # Google OAuth2 Config
 CLIENT_ID = "141742353498-5geiqu2biuf2s81klgau6qjsjve9fcrc.apps.googleusercontent.com"
-CLIENT_SECRET = "GOCSPX-jXVht-ctKWu6qjsjve9fZ3cE"
+CLIENT_SECRET = "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"
 REDIRECT_URI = "https://certificate-generator-1.streamlit.app/"
 AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
-# Connect to SQLite database
-DB_PATH = "certificate.db"
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+# Database setup
+conn = sqlite3.connect("students.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Create users table if not exists
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        email TEXT PRIMARY KEY,
-        name TEXT,
-        role TEXT DEFAULT 'Student',
-        cert_type TEXT DEFAULT 'Participation',
-        leave_days INTEGER DEFAULT 30
-    )
-''')
-
-# Create leave requests table
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS leave_requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT,
-        start_date TEXT,
-        end_date TEXT,
-        days_requested INTEGER,
-        status TEXT
-    )
-''')
-
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS students (
+    email TEXT PRIMARY KEY,
+    name TEXT,
+    remaining_leaves INTEGER DEFAULT 30
+)
+""")
 conn.commit()
 
 # Streamlit UI
-st.title("\U0001F393 Google Sign-In & Certificate Generator + Leave Management")
+st.title("🎓 Google Sign-In & Certificate Generator & Leave Request")
 
-# Step 1: Google OAuth2 Login
+# Step 1: Generate Google OAuth2 Login URL
 if "token" not in st.session_state:
-    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
+    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["email", "profile"])
     authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
     st.session_state["oauth_state"] = state
-    st.markdown(f"[Login with Google]({authorization_url})", unsafe_allow_html=True)
+    st.markdown(f"[🔑 Sign in with Google]({authorization_url})")
 
 # Step 2: Handle OAuth Callback
-if "code" in st.query_params:
+if "code" in st.query_params and "token" not in st.session_state:
     code = st.query_params["code"]
-    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
+    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state.get("oauth_state"))
     
     try:
         token = google.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET, code=code)
         st.session_state["token"] = token
-        
+
         # Fetch user info
-        user_info = requests.get(USER_INFO_URL, headers={"Authorization": f"Bearer {token}"}).json()
+        user_info = requests.get(USER_INFO_URL, headers={"Authorization": f"Bearer {token['access_token']}"}).json()
         st.session_state["user"] = user_info
+
+        # Check if user exists in DB, if not, create an entry with 30 leaves
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT remaining_leaves FROM students WHERE email=?", (user_info["email"],))
+            result = cursor.fetchone()
+
+            if result is None:
+                cursor.execute("INSERT INTO students (email, name, remaining_leaves) VALUES (?, ?, ?)", 
+                               (user_info["email"], user_info["name"], 30))
+                conn.commit()
+
     except Exception as e:
         st.error(f"OAuth Error: {e}")
 
-# Step 3: Display User Info & Handle Leave Requests
+# Step 3: Display User Info & Features After Login
 if "user" in st.session_state:
-    user_email = st.session_state["user"]["email"]
-    user_name = st.session_state["user"]["name"]
+    user_info = st.session_state["user"]
+    st.title("🎓 Google Sign-In & Certificate Generator")
     
-    st.subheader(f"Welcome, {user_email}")
-    
-    # Fetch user data
-    cursor.execute("SELECT name, role, cert_type, leave_remaining FROM users WHERE email = ?", (user_email,))
-    user = cursor.fetchone()
-    
-    if user:
-        user_name, role, remaining_leaves, cert_type = user
-    else:
-        remaining_leaves = 30
-        cursor.execute("INSERT INTO users (email, name, role, cert_type, leave_days) VALUES (?, ?, ?, ?)",
-                       (user_email, st.session_state["user"]["name"], "Student", remaining_leaves))
-        conn.commit()
-        user_name = st.session_state["user"]["name"]
-        role = "Student"
-        cert_type = "Participation"
-        st.success("User data saved.")
+    # Show user info
+    st.success(f"Welcome, {user_info['name']}!")
+    st.image(user_info.get("picture", ""), width=100)
 
-    st.write(f"**Your remaining leave days:** {remaining_leaves}")
+    # Fetch remaining leaves from DB
+    cursor.execute("SELECT remaining_leaves FROM students WHERE email=?", (user_info["email"],))
+    result = cursor.fetchone()
+    remaining_leaves = result[0] if result else 30
+
+    st.subheader("🗓️ Request Leave")
+    st.write(f"Remaining Leaves: **{remaining_leaves} days**")
     
-    # Leave Application Form
-    st.subheader("⏳ Apply for Leave")
     leave_start = st.date_input("Start Date")
     leave_end = st.date_input("End Date")
-    
-    if st.button("Apply for Leave"):
-        if leave_start and leave_end:
-            days_requested = (leave_end - leave_start).days + 1
-            if days_requested > remaining_leaves:
-                st.error("Insufficient leave balance!")
-            else:
-                new_balance = remaining_leaves - days_requested
-                cursor.execute("UPDATE users SET leave_remaining = ? WHERE email = ?", (new_balance, user_email))
-                cursor.execute("INSERT INTO leave_requests (email, days_requested, status) VALUES (?, ?, ?)", 
-                               (user_email, days_requested, "Approved"))
-                conn.commit()
-                st.success(f"Leave approved! Your new leave balance: {new_balance} days")
 
-    # Generate Certificate Section
-    st.subheader("\ud83c\udf93 Generate Your Certificate")
-    name = st.text_input("Enter Your Name", value=user_name)
+    if st.button("Request Leave"):
+        if leave_start and leave_end:
+            leave_days = (leave_end - leave_start).days + 1  # Include the start day
+            if leave_start > leave_end:
+                st.error("Error: End date must be after start date.")
+            elif remaining_leaves >= leave_end.day - leave_start.day + 1:
+                new_leave_balance = remaining_leaves - leave_days
+                cursor.execute("UPDATE students SET remaining_leaves=? WHERE email=?", 
+                               (remaining_leaves - (leave_end.day - leave_start.day + 1), user_info["email"]))
+                conn.commit()
+                st.success(f"Leave approved! You have {remaining_leaves - (leave_end.day - leave_start.day + 1)} days remaining.")
+            else:
+                st.error(f"You only have {remaining_leaves} leave days left. Request denied.")
+
+    # Certificate Generator
+    st.subheader("🎓 Generate Your Certificate")
+    name = st.text_input("Enter Your Name", value=user_info["name"])
     
     if st.button("Generate Your Certificate"):
-        pdf_buffer = BytesIO()
-        c = canvas.Canvas(pdf_buffer)
-        c.setFont("Helvetica", 30)
-        c.drawString(200, 700, f"Certificate of {cert_type}")
-        c.setFont("Helvetica", 20)
-        c.drawString(220, 650, f"Awarded to: {name}")
-        c.setFont("Helvetica", 16)
-        c.drawString(200, 600, f"Issued on: {datetime.today().strftime('%Y-%m-%d')}")
-        c.save()
-        
-        pdf_buffer = BytesIO()
-        pdf_buffer.seek(0)
-        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
+        buffer = BytesIO()
+        p = canvas.Canvas(buffer)
+        p.drawString(200, 700, "Certificate of Achievement")
+        p.drawString(220, 650, f"Awarded to: {name}")
+        p.showPage()
+        p.save()
+
+        buffer.seek(0)
+        st.download_button(
+            label="📜 Download Certificate",
+            data=buffer,
+            file_name="certificate.pdf",
+            mime="application/pdf"
+        )
 
 conn.close()
