@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import sqlite3
 from requests_oauthlib import OAuth2Session
 from PIL import Image
 from io import BytesIO
@@ -13,8 +14,13 @@ AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
+# Connect to SQLite database
+DB_PATH = "certificate.db"
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+cursor = conn.cursor()
+
 # Streamlit UI
-st.title("🎓 Google Sign-In & Certificate Generator")
+st.title("\ud83c\udf93 Google Sign-In & Certificate Generator")
 
 # Step 1: Generate Google OAuth2 Login URL
 if "token" not in st.session_state:
@@ -43,7 +49,7 @@ if "code" in st.query_params:
 # Step 3: Display User Info & Generate Certificate
 if "user" in st.session_state:
     user = st.session_state["user"]
-    st.success(f"✅ Logged in as {user['name']} ({user['email']})")
+    st.success(f"\u2705 Logged in as {user['name']} ({user['email']})")
     
     # User profile image
     image_url = user.get("picture", "")
@@ -52,18 +58,25 @@ if "user" in st.session_state:
         img = Image.open(BytesIO(response.content))
         st.image(img, width=100, caption="Google Profile Picture")
 
+    # Fetch role and cert type from SQLite database
+    cursor.execute("SELECT role, cert_type FROM users WHERE name = ?", (user["name"],))
+    result = cursor.fetchone()
+    role, cert_type = result if result else ("Unknown", "Participation")
+
     # Certificate Generation
-    st.subheader("🎓 Generate Your Certificate")
+    st.subheader("\ud83c\udf93 Generate Your Certificate")
     name = st.text_input("Enter Your Name", value=user["name"])
     
     if st.button("Generate Certificate"):
         pdf_buffer = BytesIO()
         c = canvas.Canvas(pdf_buffer)
         c.setFont("Helvetica", 30)
-        c.drawString(200, 700, f"Certificate of Achievement")
+        c.drawString(200, 700, f"Certificate of {cert_type}")
         c.setFont("Helvetica", 20)
         c.drawString(220, 650, f"Awarded to: {name}")
+        c.setFont("Helvetica", 16)
+        c.drawString(220, 600, f"Role: {role}")
         c.save()
 
         pdf_buffer.seek(0)
-        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
+        st.download_button(label="\ud83d\udcdd Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
