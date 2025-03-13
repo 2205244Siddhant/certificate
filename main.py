@@ -20,7 +20,7 @@ conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
 
 # Streamlit UI
-st.title("\ud83c\udf93 Google Sign-In & Certificate Generator")
+st.title("Google Sign-In & Certificate Generator")
 
 # Step 1: Generate Google OAuth2 Login URL
 if "token" not in st.session_state:
