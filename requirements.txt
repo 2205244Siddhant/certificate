@@ -1,7 +1,3 @@
 streamlit
 requests
-requests-oauthlib
-pillow
-reportlab
-pypdf2
-python-docx
+python-dotenv
